@@ -7,6 +7,9 @@ ButtonStatus::ButtonStatus(int pin)
     pressed = false;
 }
 
+// button must be unpressed and checked before it can return as pressed again
+// this stops the endless toggling that could otherwise happen by just
+// checking for LOW
 bool ButtonStatus::status()
 {
     if (digitalRead(buttonPin) == LOW && !pressed)
@@ -14,12 +17,9 @@ bool ButtonStatus::status()
         pressed = true;
         return true;
     }
-    else
+    else if (pressed)
     {
-        if (pressed)
-        {
-            pressed = false;
-        } 
+        pressed = false;
     }
     return false;
 }
