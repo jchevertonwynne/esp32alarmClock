@@ -17,7 +17,7 @@ bool ButtonStatus::status()
         pressed = true;
         return true;
     }
-    else if (pressed)
+    else if (digitalRead(buttonPin) == LOW && pressed)
     {
         pressed = false;
     }
