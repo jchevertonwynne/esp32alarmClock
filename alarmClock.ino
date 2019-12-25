@@ -2,6 +2,7 @@
 #include "EEPROM.h"
 #include <ESPAsyncWebServer.h>
 #include "private.h"
+#include "SPIFFS.h"
 #include <string>
 #include "time.h"
 #include <WiFi.h>
@@ -9,7 +10,6 @@
 const int PIN_BUZZER = 13;
 const int PIN_BUTTON = 12;
 const int MAX_ALARMS = 250;
-ButtonStatus button(PIN_BUTTON);
 
 AsyncWebServer *webServer;
 
@@ -30,7 +30,8 @@ struct AlarmEntry
     bool complete;
 };
 
-bool compareTimes(AlarmEntry a, AlarmEntry b) {
+bool compareTimes(AlarmEntry a, AlarmEntry b) 
+{
     return a.hour == b.hour ? a.minute < b.minute : a.hour < b.hour;
 }
 
@@ -46,6 +47,7 @@ void handleRoot(AsyncWebServerRequest *request);
 void handleAdd(AsyncWebServerRequest *request);
 void handleDelete(AsyncWebServerRequest *request);
 void handleBeepNow(AsyncWebServerRequest *request);
+void handleTime(AsyncWebServerRequest *request);
 
 bool validDeletion(AsyncWebServerRequest *request);
 bool validNewAlarm(AsyncWebServerRequest *request);
@@ -61,7 +63,8 @@ void setup()
 
     Serial.printf("Connecting to network %s...\n", wifiSSID);
     WiFi.begin(wifiSSID, wifiPassword);
-    if (WiFi.waitForConnectResult() != WL_CONNECTED) {
+    if (WiFi.waitForConnectResult() != WL_CONNECTED)
+    {
         Serial.println("WiFi could not be connected?");
         while (true) {}
     }
@@ -81,6 +84,14 @@ void setup()
         &Task1,      /* Task handle. */
         0);          /* Core where the task should run */
 
+    Serial.println("Mounting SPIFFS...");
+    if (!SPIFFS.begin(true))
+    {
+        Serial.println("An Error has occurred while mounting SPIFFS");
+        while (true) {}
+    }
+    Serial.println("SPIFFS mounted!");
+
     loadAlarms();
     initServer();
 }
@@ -89,8 +100,11 @@ void loop()
 {
     getLocalTime(&currentTime);
 
+    Serial.printf("%02d:%02d:%02d %d\n", currentTime.tm_hour, currentTime.tm_min, currentTime.tm_sec, currentTime.tm_wday);
+
     // at midnight enable all alarms for the new day
-    if (currentTime.tm_hour == 0 && currentTime.tm_min == 0 && lastTime.tm_hour == 23 && lastTime.tm_min == 59){
+    if (currentTime.tm_hour == 0 && currentTime.tm_min == 0 && lastTime.tm_hour == 23 && lastTime.tm_min == 59)
+    {
         Serial.println("Just past midnight, enabling all alarms...");
         for (int i = 0; i < alarms.size(); i++) 
         {
@@ -98,8 +112,6 @@ void loop()
         }
         Serial.println("Alarms enabled!");
     }
-
-    Serial.printf("%02d:%02d:%02d\n", currentTime.tm_hour, currentTime.tm_min, currentTime.tm_sec);
 
     if (anyAlarmsDueNow())
     {
@@ -119,72 +131,77 @@ void initServer()
     webServer->on("/add", handleAdd);
     webServer->on("/delete", handleDelete);
     webServer->on("/beepNow", handleBeepNow);
+    webServer->on("/time", handleTime);
     webServer->onNotFound(handleRoot);
     webServer->begin();
 
+    Serial.println("Server set up!");
     Serial.println("Hosting on: ");
     Serial.println(WiFi.localIP());
+
 }
 
 void handleRoot(AsyncWebServerRequest *request)
 {
-    char buffer[10];
-    String page = "";
-    page += "<!DOCTYPE html>";
-    page += "<html>";
+    Serial.println("Homepage requested!");
 
-    page += "<head>";
-    page += "<title>Alarms</title>";
-    page += "</head>";
+    // char buffer[10];
+    // String page = "";
+    // page += "<!DOCTYPE html>";
+    // page += "<html>";
+
+    // page += "<head>";
+    // page += "<title>Alarms</title>";
+    // page += "</head>";
  
-    page += "<body>";
+    // page += "<body>";
 
-    page += "<h1> Current Time: ";
-    sprintf(buffer, "%02d:%02d", currentTime.tm_hour, currentTime.tm_min);
-    page += buffer;
-    page += "</h1>";
+    // page += "<h1> Current Time: ";
+    // sprintf(buffer, "%02d:%02d", currentTime.tm_hour, currentTime.tm_min);
+    // page += buffer;
+    // page += "</h1>";
 
-    page += "<h1> Active alarms </h1>";
-    page += "<ol start=\"0\">";
-    for (int i = 0; i < alarms.size(); i++) 
-    {
-        AlarmEntry alarm = alarms[i];
+    // page += "<h1> Active alarms </h1>";
+    // page += "<ol start=\"0\">";
+    // for (int i = 0; i < alarms.size(); i++) 
+    // {
+    //     AlarmEntry alarm = alarms[i];
 
-        sprintf(buffer, "%02d:%02d", alarm.hour, alarm.minute);
-        page += "<li>";
-        page += buffer;
-        page += "<a href=\"delete?alarmNumber=";
-        sprintf(buffer, "%d", i);
-        page += buffer;
-        page += "\">Delete</a>";
-        page += "</li>";
-    }
-    page += "</ol>";
+    //     sprintf(buffer, "%02d:%02d", alarm.hour, alarm.minute);
+    //     page += "<li>";
+    //     page += buffer;
+    //     page += "<a href=\"delete?alarmNumber=";
+    //     itoa(i, buffer, 10);
+    //     page += buffer;
+    //     page += "\">Delete</a>";
+    //     page += "</li>";
+    // }
+    // page += "</ol>";
 
-    page += "<form action=\"/add\">";
-    page += "Hours: <input type=\"text\" name=\"hours\">";
-    page += "Minutes: <input type=\"text\" name=\"minutes\">";
-    page += "<br><br>";
-    page += "<input type=\"submit\" value=\"Submit\">";
-    page += "</form>";
+    // page += "<form action=\"/add\">";
+    // page += "Hours: <input type=\"text\" name=\"hours\">";
+    // page += "Minutes: <input type=\"text\" name=\"minutes\">";
+    // page += "<br><br>";
+    // page += "<input type=\"submit\" value=\"Submit\">";
+    // page += "</form>";
 
-    page += "<a href=\"/beepNow\">Beep right now</a>";
+    // page += "<a href=\"/beepNow\">Beep right now</a>";
 
-    page += "<br>";
+    // page += "<br>";
 
-    page += "<a href=\"/add?hours=";
-    itoa(currentTime.tm_hour + 1 % 24, buffer, 10);
-    page += buffer;
-    page += "&minutes=";
-    itoa(currentTime.tm_min, buffer, 10);
-    page += buffer;
-    page += "\">Set alarm for in one hour</a>";
+    // page += "<a href=\"/add?hours=";
+    // itoa(currentTime.tm_hour + 1 % 24, buffer, 10);
+    // page += buffer;
+    // page += "&minutes=";
+    // itoa(currentTime.tm_min, buffer, 10);
+    // page += buffer;
+    // page += "\">Set alarm for in one hour</a>";
 
-    page += "</body>";
+    // page += "</body>";
 
-    page += "</html>";
+    // page += "</html>";
 
-    request->send(200, "text/html", page);
+    // request->send(200, "text/html", page);
 }
 
 void handleAdd(AsyncWebServerRequest *request)
@@ -235,6 +252,13 @@ void handleBeepNow(AsyncWebServerRequest *request)
     request->redirect("/");
 }
 
+void handleTime(AsyncWebServerRequest *request)
+{
+    char result[32];
+    sprintf(result, "{mins:%d, hours:%d}", currentTime.tm_min, currentTime.tm_hour);
+    request->send(200, "text/json", result);
+}
+
 bool anyAlarmsDueNow() 
 {
     bool result = false;
@@ -258,10 +282,10 @@ void loadAlarms()
     {   
         int hours = EEPROM.read(1 + i * 2);
         int minutes = EEPROM.read(2 + i * 2);
-        AlarmEntry storedAlarm = {hours, minutes, true};
+        AlarmEntry storedAlarm = {hours, minutes, false};
         alarms.push_back(storedAlarm);
     }
-    Serial.println("Alarms loaded");
+    Serial.println("Alarms loaded!");
 }
 
 void saveAlarms()
@@ -357,6 +381,7 @@ bool validDeletion(AsyncWebServerRequest *request, int *alarmNumber)
 
 void beepAlarm(void *parameter)
 {
+    ButtonStatus button(PIN_BUTTON);
     while (true)
     {
         xSemaphoreTake(semaphore, portMAX_DELAY);
@@ -369,7 +394,15 @@ void beepAlarm(void *parameter)
             {
                 digitalWrite(PIN_BUZZER, HIGH);
             }
-            else if (loop % 80 == 70)
+            else if (loop % 80 == 40)
+            {
+                digitalWrite(PIN_BUZZER, LOW);
+            }
+            else if (loop % 80 == 50)
+            {
+                digitalWrite(PIN_BUZZER, HIGH);
+            }
+            else if (loop % 80 == 60)
             {
                 digitalWrite(PIN_BUZZER, LOW);
             }

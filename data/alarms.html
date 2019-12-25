@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>Alarms</title>
+    </head>
+    <body>
+        <h1>Current Time: <span></span></h1>
+        <h1>Active Alarms:</h1>
+        <ol id="alarmList">
+        </ol>
+
+        <form action="/add">
+            Hours: <input type="text" name="hours">
+            Minutes: <input type="text" name="minutes">
+            <br>
+            Alarms on:
+            <br>
+            <input type="checkbox" name="mon" value="mon"> Monday <br>
+            <input type="checkbox" name="tues" value="tues"> Tuesday <br>
+            <input type="checkbox" name="wed" value="wed"> Wednesday <br>
+            <input type="checkbox" name="thurs" value="thurs"> Thursday <br>
+            <input type="checkbox" name="fri" value="fri"> Friday <br>
+            <input type="checkbox" name="sat" value="sat"> Saturday <br>
+            <input type="checkbox" name="sun" value="sun"> Sunday <br>
+            <br><br>
+            <input type="submit" value="Submit">
+        </form>
+
+        <a href="beepNow">Beep right now</a>
+
+    </body>
+</html>
