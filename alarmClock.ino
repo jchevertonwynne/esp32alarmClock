@@ -385,14 +385,17 @@ void beepAlarm(void *parameter)
 
         digitalWrite(PIN_BUZZER, HIGH);
         digitalWrite(LED, HIGH);
+        int repeats = 0;
         int loop = 0;
-        while (!button.status())
+        while (!button.status() && repeats < 60)
         {
-            if (loop % 80 == 0)
+            int step = loop % 100;
+            if (step == 0 || step == 50)
             {
                 digitalWrite(PIN_BUZZER, HIGH);
+                repeats++;
             }
-            else if (loop % 80 == 70)
+            else if (step == 40 || step == 90)
             {
                 digitalWrite(PIN_BUZZER, LOW);
             }
