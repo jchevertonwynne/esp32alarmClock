@@ -6,8 +6,9 @@
 #include "time.h"
 #include <WiFi.h>
 
-const int PIN_BUZZER = 13;
-const int PIN_BUTTON = 12;
+const int PIN_BUZZER = 15;
+const int PIN_BUTTON = 13;
+const int LED = 32;
 const int MAX_ALARMS = 250;
 ButtonStatus button(PIN_BUTTON);
 
@@ -36,12 +37,13 @@ bool compareTimes(AlarmEntry a, AlarmEntry b) {
 
 std::vector<AlarmEntry> alarms;
 
+void handleWifiConnection();
+
 bool anyAlarmsDueNow();
 void loadAlarms();
 void saveAlarms();
 
 void initServer();
-
 void handleRoot(AsyncWebServerRequest *request);
 void handleAdd(AsyncWebServerRequest *request);
 void handleDelete(AsyncWebServerRequest *request);
@@ -58,18 +60,16 @@ void setup()
     EEPROM.begin(512);
     pinMode(PIN_BUZZER, OUTPUT);
     pinMode(PIN_BUTTON, INPUT_PULLUP);
+    pinMode(LED, OUTPUT);
 
-    Serial.printf("Connecting to network %s...\n", wifiSSID);
-    WiFi.begin(wifiSSID, wifiPassword);
-    if (WiFi.waitForConnectResult() != WL_CONNECTED) {
-        Serial.println("WiFi could not be connected?");
-        while (true) {}
-    }
-    Serial.println("Connected to WiFi!");
+    handleWifiConnection();
 
     Serial.println("Setting time...");
     configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
     Serial.println("Time set!");
+
+    loadAlarms();
+    initServer();
 
     semaphore = xSemaphoreCreateBinary();
     xTaskCreatePinnedToCore(
@@ -80,13 +80,12 @@ void setup()
         0,           /* Priority of the task */
         &Task1,      /* Task handle. */
         0);          /* Core where the task should run */
-
-    loadAlarms();
-    initServer();
 }
 
 void loop()
 {
+    handleWifiConnection();
+
     getLocalTime(&currentTime);
 
     // at midnight enable all alarms for the new day
@@ -111,6 +110,27 @@ void loop()
     delay(1000);
 }
 
+void handleWifiConnection()
+{
+    uint8_t status = WiFi.status();
+
+    if (status != WL_CONNECTED)
+    {
+        digitalWrite(LED, HIGH);
+        Serial.printf("Connecting to network %s...\n", wifiSSID);
+        
+        while (status != WL_CONNECTED)
+        {
+            WiFi.disconnect(true);
+            WiFi.begin(wifiSSID, wifiPassword);
+            status = WiFi.waitForConnectResult();
+        }
+
+        Serial.println("Connected to WiFi!");
+        digitalWrite(LED, LOW);
+    }
+}
+
 void initServer()
 {
     Serial.println("Setting up server...");
@@ -128,6 +148,7 @@ void initServer()
 
 void handleRoot(AsyncWebServerRequest *request)
 {
+    Serial.println("Homepage requested...");
     char buffer[10];
     String page = "";
     page += "<!DOCTYPE html>";
@@ -185,6 +206,7 @@ void handleRoot(AsyncWebServerRequest *request)
     page += "</html>";
 
     request->send(200, "text/html", page);
+    Serial.println("Homepage handled!");
 }
 
 void handleAdd(AsyncWebServerRequest *request)
@@ -208,6 +230,7 @@ void handleAdd(AsyncWebServerRequest *request)
     }
 
     request->redirect("/");
+    Serial.println("New alarm handled!");
 }
 
 void handleDelete(AsyncWebServerRequest *request)
@@ -225,11 +248,11 @@ void handleDelete(AsyncWebServerRequest *request)
     }
 
     request->redirect("/");
+    Serial.println("Delete request handled!");
 }
 
 void handleBeepNow(AsyncWebServerRequest *request)
 {
-    TaskHandle_t Task1;
     Serial.println("Beep now request");
     xSemaphoreGive(semaphore);
     request->redirect("/");
@@ -258,7 +281,7 @@ void loadAlarms()
     {   
         int hours = EEPROM.read(1 + i * 2);
         int minutes = EEPROM.read(2 + i * 2);
-        AlarmEntry storedAlarm = {hours, minutes, true};
+        AlarmEntry storedAlarm = {hours, minutes, false};
         alarms.push_back(storedAlarm);
     }
     Serial.println("Alarms loaded");
@@ -270,30 +293,23 @@ void saveAlarms()
     EEPROM.write(0, alarms.size());
     for (int i = 0; i < alarms.size(); i++) 
     {
-        AlarmEntry alarm = alarms[i];
-        EEPROM.write(1 + i * 2, alarm.hour);
-        EEPROM.write(2 + i * 2, alarm.minute);
+        AlarmEntry *alarm = &alarms[i];
+        EEPROM.write(1 + i * 2, alarm->hour);
+        EEPROM.write(2 + i * 2, alarm->minute);
     }
     EEPROM.commit();
     Serial.println("Alarms saved!");
 }
 
-bool validNewAlarm(AsyncWebServerRequest *request, int *hours, int *minutes)
+bool validNumber(AsyncWebServerRequest *request, int *dest, char* fieldName)
 {
-    if (alarms.size() == MAX_ALARMS)
+    if (!request->hasParam(fieldName))
     {
         return false;
     }
 
-    if (!(request->hasParam("hours") && request->hasParam("minutes")))
-    {
-        return false;
-    }
-
-    try
-    {
-        *hours = atoi(request->getParam("hours")->value().c_str());
-        *minutes = atoi(request->getParam("minutes")->value().c_str());
+    try {
+        *dest = atoi(request->getParam(fieldName)->value().c_str());
     }
     catch (std::invalid_argument const &e)
     {
@@ -304,7 +320,12 @@ bool validNewAlarm(AsyncWebServerRequest *request, int *hours, int *minutes)
         return false;
     }
 
-    if (*hours < 0 || *hours > 23)
+    return true;
+}
+
+bool validTime(AsyncWebServerRequest *request, int *hours, int *minutes)
+{
+    if (!validNumber(request, hours, "hours") || !validNumber(request, minutes, "minutes"))
     {
         return false;
     }
@@ -314,7 +335,21 @@ bool validNewAlarm(AsyncWebServerRequest *request, int *hours, int *minutes)
         return false;
     }
 
-    bool alreadySet = false;
+    return true;
+}
+
+bool validNewAlarm(AsyncWebServerRequest *request, int *hours, int *minutes)
+{
+    if (alarms.size() == MAX_ALARMS)
+    {
+        return false;
+    }
+
+    if (!validTime(request, hours, minutes)) 
+    {
+        return false;
+    }
+
     for (int i = 0; i < alarms.size(); i++)
     {
         AlarmEntry alarm = alarms[i];
@@ -329,20 +364,7 @@ bool validNewAlarm(AsyncWebServerRequest *request, int *hours, int *minutes)
 
 bool validDeletion(AsyncWebServerRequest *request, int *alarmNumber)
 {
-    if (!(request->hasParam("alarmNumber")))
-    {
-        return false;
-    }
-
-    try
-    {
-        *alarmNumber = atoi(request->getParam("alarmNumber")->value().c_str());
-    }
-    catch (std::invalid_argument const &e)
-    {
-        return false;
-    }
-    catch (std::out_of_range const &e)
+    if (!validNumber(request, alarmNumber, "alarmNumber"))
     {
         return false;
     }
@@ -362,6 +384,7 @@ void beepAlarm(void *parameter)
         xSemaphoreTake(semaphore, portMAX_DELAY);
 
         digitalWrite(PIN_BUZZER, HIGH);
+        digitalWrite(LED, HIGH);
         int loop = 0;
         while (!button.status())
         {
@@ -377,5 +400,6 @@ void beepAlarm(void *parameter)
             delay(5);
         }
         digitalWrite(PIN_BUZZER, LOW);
+        digitalWrite(LED, LOW);
     }
 }
