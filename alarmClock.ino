@@ -60,7 +60,7 @@ TaskHandle_t Task1;
 
 const char *ntpServer = "pool.ntp.org";
 const long gmtOffset_sec = 0;
-const int daylightOffset_sec = 3600;
+const int daylightOffset_sec = 0;
 
 struct tm currentTime;
 struct tm lastTime;
@@ -104,32 +104,23 @@ String timeToString(Time time) {
 
 Time timeToAlarm(Time other)
 {
-    Time now =
-    {
-        currentTime.tm_hour,
-        currentTime.tm_min
-    };
+    Time now = { currentTime.tm_hour, currentTime.tm_min };
     int hourDiff;
     int minuteDiff;
     if (compareTimes(now, other))
     {
         hourDiff = other.hour - now.hour;
         minuteDiff = other.minute - now.minute - 1;
-        if (minuteDiff < 0)
-        {
-            hourDiff--;
-            minuteDiff += 60;
-        }
     }
     else
     {
         hourDiff = 23 - (now.hour - other.hour);
         minuteDiff = 59 - (now.minute - other.minute);
-        if (minuteDiff < 0)
-        {
-            hourDiff--;
-            minuteDiff += 60;
-        }
+    }
+    if (minuteDiff < 0)
+    {
+        hourDiff--;
+        minuteDiff += 60;
     }
     return {
         hourDiff,
@@ -162,10 +153,8 @@ void goToSleep()
 void enableAlarms()
 {
     Serial.println("Just past midnight, enabling all alarms...");
-    for (int i = 0; i < alarms.size(); i++)
-    {
+    for (int i = 0; i < alarms.size(); i++) 
         alarms[i].complete = false;
-    }
     Serial.println("Alarms enabled!");
 }
 
@@ -318,7 +307,7 @@ void handleAdd(AsyncWebServerRequest * request)
     {
         Serial.println("Valid alarm, adding");
 
-        AlarmEntry newAlarm = {hours, minutes, false};
+        AlarmEntry newAlarm = {{ hours, minutes }, false };
         alarms.push_back(newAlarm);
         sort(alarms.begin(), alarms.end(), compareAlarms);
 
@@ -409,77 +398,43 @@ void saveAlarms()
 
 bool validNumber(AsyncWebServerRequest * request, int *dest, char *fieldName)
 {
-        if (!request->hasParam(fieldName))
-        {
-            return false;
-        }
-
-        try {
+    if (!request->hasParam(fieldName)) return false;
+    try {
         *dest = atoi(request->getParam(fieldName)->value().c_str());
     }
-    catch (std::invalid_argument const &e)
+    catch (std::invalid_argument const &e) 
     {
         return false;
     }
-    catch (std::out_of_range const &e)
-    {
+    catch (std::out_of_range const &e) {
         return false;
     }
-
     return true;
 }
 
 bool validTime(AsyncWebServerRequest *request, int *hours, int *minutes)
 {
-    if (!validNumber(request, hours, "hours") || !validNumber(request, minutes, "minutes"))
-    {
-        return false;
-    }
-
-    if (*minutes < 0 || *minutes > 59)
-    {
-        return false;
-    }
-
+    if (!validNumber(request, hours, "hours") || !validNumber(request, minutes, "minutes")) return false;
+    if (*minutes < 0 || *minutes > 59) return false;
     return true;
 }
 
 bool validNewAlarm(AsyncWebServerRequest *request, int *hours, int *minutes)
 {
-    if (alarms.size() == MAX_ALARMS)
-    {
-        return false;
-    }
-
-    if (!validTime(request, hours, minutes)) 
-    {
-        return false;
-    }
-
+    if (alarms.size() == MAX_ALARMS) return false;
+    if (!validTime(request, hours, minutes)) return false;
     for (int i = 0; i < alarms.size(); i++)
     {
         AlarmEntry alarm = alarms[i];
-        if (alarm.time.hour == *hours && alarm.time.minute == *minutes)
-        {
-            return false;
-        }
+        if (alarm.time.hour == *hours && alarm.time.minute == *minutes) return false;
     }
-
     return true;
 }
 
 bool validDeletion(AsyncWebServerRequest *request, int *alarmNumber)
 {
-    if (!validNumber(request, alarmNumber, "alarmNumber"))
-    {
-        return false;
-    }
-
-    if (*alarmNumber < 0 || *alarmNumber >= alarms.size())
-    {
-        return false;
-    }
-
+    if (!validNumber(request, alarmNumber, "alarmNumber")) return false;
+    if (*alarmNumber < 0 || *alarmNumber >= alarms.size()) return false;
     return true;
 }
 
