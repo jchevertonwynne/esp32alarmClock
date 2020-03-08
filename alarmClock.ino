@@ -8,51 +8,166 @@
 
 const int PIN_BUZZER = 15;
 const int PIN_BUTTON = 13;
-const int LED = 32;
+const int LED_RED = 32;
+const int LED_GREEN = 33;
 const int MAX_ALARMS = 250;
-ButtonStatus button(PIN_BUTTON);
 
-AsyncWebServer *webServer;
+const int TIME_TO_SLEEP = 120;
 
-SemaphoreHandle_t semaphore;
-TaskHandle_t Task1;
-
-const char* ntpServer = "pool.ntp.org";
-const long gmtOffset_sec = 0;
-const int daylightOffset_sec = 3600;
-
-struct tm currentTime;
-struct tm lastTime;
-
-struct AlarmEntry
+struct Time
 {
     int hour;
     int minute;
+};
+
+struct AlarmEntry
+{
+    Time time;
     bool complete;
 };
 
-bool compareTimes(AlarmEntry a, AlarmEntry b) {
-    return a.hour == b.hour ? a.minute < b.minute : a.hour < b.hour;
-}
-
-std::vector<AlarmEntry> alarms;
-
-void handleWifiConnection();
+void monitorWifiConnection();
 
 bool anyAlarmsDueNow();
 void loadAlarms();
 void saveAlarms();
 
 void initServer();
-void handleRoot(AsyncWebServerRequest *request);
-void handleAdd(AsyncWebServerRequest *request);
-void handleDelete(AsyncWebServerRequest *request);
-void handleBeepNow(AsyncWebServerRequest *request);
+void handleRoot(AsyncWebServerRequest * request);
+void handleAdd(AsyncWebServerRequest * request);
+void handleDelete(AsyncWebServerRequest * request);
+void handleBeepNow(AsyncWebServerRequest * request);
+void handleSleep(AsyncWebServerRequest * request);
 
-bool validDeletion(AsyncWebServerRequest *request);
-bool validNewAlarm(AsyncWebServerRequest *request);
+bool validDeletion(AsyncWebServerRequest * request);
+bool validNewAlarm(AsyncWebServerRequest * request);
 
 void beepAlarm();
+
+Time nextAlarm();
+Time timeToAlarm(Time other);
+int timeToSeconds(Time time);
+String timeToString(Time time);
+
+ButtonStatus button(PIN_BUTTON);
+
+int lastInteraction = 0;
+
+AsyncWebServer *webServer;
+
+SemaphoreHandle_t semaphore;
+TaskHandle_t Task1;
+
+const char *ntpServer = "pool.ntp.org";
+const long gmtOffset_sec = 0;
+const int daylightOffset_sec = 3600;
+
+struct tm currentTime;
+struct tm lastTime;
+
+bool compareAlarms(AlarmEntry a, AlarmEntry b)
+{
+    Time aTime = a.time;
+    Time bTime = b.time;
+
+    return compareTimes(aTime, bTime);
+}
+
+bool compareTimes(Time a, Time b)
+{
+    return a.hour == b.hour ? a.minute < b.minute : a.hour < b.hour;
+}
+
+std::vector<AlarmEntry> alarms;
+
+Time nextAlarm()
+{
+    Time now = {
+        currentTime.tm_hour,
+        currentTime.tm_min
+    };
+    for (int i = 0; i < alarms.size(); i++) 
+    {
+        Time alarmTime = alarms[i].time;
+        if (compareTimes(now, alarmTime)) return alarmTime;
+    }
+    return alarms[0].time;
+}
+
+String timeToString(Time time) {
+    char buffer[10];
+    sprintf(buffer, "%02d:%02d", time.hour, time.minute);
+    String result = "";
+    result += buffer;
+    return result;
+}
+
+Time timeToAlarm(Time other)
+{
+    Time now =
+    {
+        currentTime.tm_hour,
+        currentTime.tm_min
+    };
+    int hourDiff;
+    int minuteDiff;
+    if (compareTimes(now, other))
+    {
+        hourDiff = other.hour - now.hour;
+        minuteDiff = other.minute - now.minute - 1;
+        if (minuteDiff < 0)
+        {
+            hourDiff--;
+            minuteDiff += 60;
+        }
+    }
+    else
+    {
+        hourDiff = 23 - (now.hour - other.hour);
+        minuteDiff = 59 - (now.minute - other.minute);
+        if (minuteDiff < 0)
+        {
+            hourDiff--;
+            minuteDiff += 60;
+        }
+    }
+    return {
+        hourDiff,
+        minuteDiff
+    };
+}
+
+int timeToSeconds(Time time) {
+    return time.hour * 3600 + time.minute * 60;
+}
+
+void goToSleep()
+{
+    if (alarms.size() > 0)
+    {
+        Time next = nextAlarm();
+        Time timeToNext = timeToAlarm(next);
+        int secondsToAlarm = timeToSeconds(timeToNext);
+        uint64_t mul = 1000000LL;
+        uint64_t sleepTime = secondsToAlarm * mul;
+        esp_sleep_enable_timer_wakeup(sleepTime);
+        Serial.printf("Sleeping for %s (%d seconds) until %s\n", timeToString(timeToNext), secondsToAlarm, timeToString(next));
+        Serial.printf("%u ns\n", sleepTime);
+    }
+    esp_sleep_enable_ext0_wakeup(GPIO_NUM_13, 0);
+    Serial.println("Sleeping alarm...");
+    esp_deep_sleep_start();
+}
+
+void enableAlarms()
+{
+    Serial.println("Just past midnight, enabling all alarms...");
+    for (int i = 0; i < alarms.size(); i++)
+    {
+        alarms[i].complete = false;
+    }
+    Serial.println("Alarms enabled!");
+}
 
 void setup()
 {
@@ -60,9 +175,11 @@ void setup()
     EEPROM.begin(512);
     pinMode(PIN_BUZZER, OUTPUT);
     pinMode(PIN_BUTTON, INPUT_PULLUP);
-    pinMode(LED, OUTPUT);
+    pinMode(LED_RED, OUTPUT);
+    pinMode(LED_GREEN, OUTPUT);
 
-    handleWifiConnection();
+    digitalWrite(LED_GREEN, HIGH);
+    monitorWifiConnection();
 
     Serial.println("Setting time...");
     configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
@@ -79,46 +196,31 @@ void setup()
         NULL,        /* Task input parameter */
         0,           /* Priority of the task */
         &Task1,      /* Task handle. */
-        0);          /* Core where the task should run */
+        0            /* Core where the task should run */
+    );
 }
 
 void loop()
 {
-    handleWifiConnection();
-
+    if (++lastInteraction > TIME_TO_SLEEP) goToSleep();
+    monitorWifiConnection();
     getLocalTime(&currentTime);
-
-    // at midnight enable all alarms for the new day
-    if (currentTime.tm_hour == 0 && currentTime.tm_min == 0 && lastTime.tm_hour == 23 && lastTime.tm_min == 59){
-        Serial.println("Just past midnight, enabling all alarms...");
-        for (int i = 0; i < alarms.size(); i++) 
-        {
-            alarms[i].complete = false;
-        }
-        Serial.println("Alarms enabled!");
-    }
-
+    if (currentTime.tm_hour == 0 && currentTime.tm_min == 0 && lastTime.tm_hour == 23 && lastTime.tm_min == 59) enableAlarms();
     Serial.printf("%02d:%02d:%02d\n", currentTime.tm_hour, currentTime.tm_min, currentTime.tm_sec);
-
-    if (anyAlarmsDueNow())
-    {
-        Serial.println("Valid alarm(s) detected!");
-        xSemaphoreGive(semaphore);
-        Serial.println("Alarm disabled!");
-    }
+    if (anyAlarmsDueNow()) xSemaphoreGive(semaphore);
     lastTime = currentTime;
     delay(1000);
 }
 
-void handleWifiConnection()
+void  monitorWifiConnection()
 {
     uint8_t status = WiFi.status();
 
     if (status != WL_CONNECTED)
     {
-        digitalWrite(LED, HIGH);
+        digitalWrite(LED_RED, HIGH);
         Serial.printf("Connecting to network %s...\n", wifiSSID);
-        
+
         while (status != WL_CONNECTED)
         {
             WiFi.disconnect(true);
@@ -127,7 +229,7 @@ void handleWifiConnection()
         }
 
         Serial.println("Connected to WiFi!");
-        digitalWrite(LED, LOW);
+        digitalWrite(LED_RED, LOW);
     }
 }
 
@@ -139,6 +241,8 @@ void initServer()
     webServer->on("/add", handleAdd);
     webServer->on("/delete", handleDelete);
     webServer->on("/beepNow", handleBeepNow);
+    webServer->on("/sleep", handleSleep);
+
     webServer->onNotFound(handleRoot);
     webServer->begin();
 
@@ -146,8 +250,9 @@ void initServer()
     Serial.println(WiFi.localIP());
 }
 
-void handleRoot(AsyncWebServerRequest *request)
+void handleRoot(AsyncWebServerRequest * request)
 {
+    lastInteraction = 0;
     Serial.println("Homepage requested...");
     char buffer[10];
     String page = "";
@@ -157,7 +262,7 @@ void handleRoot(AsyncWebServerRequest *request)
     page += "<head>";
     page += "<title>Alarms</title>";
     page += "</head>";
- 
+
     page += "<body>";
 
     page += "<h1> Current Time: ";
@@ -167,11 +272,11 @@ void handleRoot(AsyncWebServerRequest *request)
 
     page += "<h1> Active alarms </h1>";
     page += "<ol start=\"0\">";
-    for (int i = 0; i < alarms.size(); i++) 
+    for (int i = 0; i < alarms.size(); i++)
     {
         AlarmEntry alarm = alarms[i];
 
-        sprintf(buffer, "%02d:%02d", alarm.hour, alarm.minute);
+        sprintf(buffer, "%02d:%02d", alarm.time.hour, alarm.time.minute);
         page += "<li>";
         page += buffer;
         page += "<a href=\"delete?alarmNumber=";
@@ -190,16 +295,8 @@ void handleRoot(AsyncWebServerRequest *request)
     page += "</form>";
 
     page += "<a href=\"/beepNow\">Beep right now</a>";
-
     page += "<br>";
-
-    page += "<a href=\"/add?hours=";
-    itoa(currentTime.tm_hour + 1 % 24, buffer, 10);
-    page += buffer;
-    page += "&minutes=";
-    itoa(currentTime.tm_min, buffer, 10);
-    page += buffer;
-    page += "\">Set alarm for in one hour</a>";
+    page += "<a href=\"/sleep\">Sleep</a>";
 
     page += "</body>";
 
@@ -209,8 +306,9 @@ void handleRoot(AsyncWebServerRequest *request)
     Serial.println("Homepage handled!");
 }
 
-void handleAdd(AsyncWebServerRequest *request)
+void handleAdd(AsyncWebServerRequest * request)
 {
+    lastInteraction = 0;
     Serial.println("New alarm request");
 
     int hours;
@@ -222,7 +320,7 @@ void handleAdd(AsyncWebServerRequest *request)
 
         AlarmEntry newAlarm = {hours, minutes, false};
         alarms.push_back(newAlarm);
-        sort(alarms.begin(), alarms.end(), compareTimes);
+        sort(alarms.begin(), alarms.end(), compareAlarms);
 
         Serial.printf("New alarm added at %d:%d\n", hours, minutes);
 
@@ -233,8 +331,9 @@ void handleAdd(AsyncWebServerRequest *request)
     Serial.println("New alarm handled!");
 }
 
-void handleDelete(AsyncWebServerRequest *request)
+void handleDelete(AsyncWebServerRequest * request)
 {
+    lastInteraction = 0;
     Serial.println("New delete request");
 
     int alarmNumber;
@@ -251,20 +350,27 @@ void handleDelete(AsyncWebServerRequest *request)
     Serial.println("Delete request handled!");
 }
 
-void handleBeepNow(AsyncWebServerRequest *request)
+void handleBeepNow(AsyncWebServerRequest * request)
 {
+    lastInteraction = 0;
     Serial.println("Beep now request");
     xSemaphoreGive(semaphore);
     request->redirect("/");
 }
 
-bool anyAlarmsDueNow() 
+void handleSleep(AsyncWebServerRequest *request)
+{
+    request->redirect("https://github.com/jchevertonwynne/esp32alarmClock");
+    goToSleep();
+}
+
+bool anyAlarmsDueNow()
 {
     bool result = false;
     for (int i = 0; i < alarms.size(); i++)
     {
-        AlarmEntry* alarm = &alarms[i];
-        if (alarm->hour == currentTime.tm_hour && alarm->minute == currentTime.tm_min && !alarm->complete)
+        AlarmEntry *alarm = &alarms[i];
+        if (alarm->time.hour == currentTime.tm_hour && alarm->time.minute == currentTime.tm_min && !alarm->complete)
         {
             alarm->complete = true;
             result = true;
@@ -278,10 +384,10 @@ void loadAlarms()
     Serial.println("Loading alarms...");
     int alarmCount = EEPROM.read(0);
     for (int i = 0; i < alarmCount; i++)
-    {   
+    {
         int hours = EEPROM.read(1 + i * 2);
         int minutes = EEPROM.read(2 + i * 2);
-        AlarmEntry storedAlarm = {hours, minutes, false};
+        AlarmEntry storedAlarm = {{hours, minutes}, false};
         alarms.push_back(storedAlarm);
     }
     Serial.println("Alarms loaded");
@@ -291,24 +397,24 @@ void saveAlarms()
 {
     Serial.println("Saving alarms...");
     EEPROM.write(0, alarms.size());
-    for (int i = 0; i < alarms.size(); i++) 
+    for (int i = 0; i < alarms.size(); i++)
     {
         AlarmEntry *alarm = &alarms[i];
-        EEPROM.write(1 + i * 2, alarm->hour);
-        EEPROM.write(2 + i * 2, alarm->minute);
+        EEPROM.write(1 + i * 2, alarm->time.hour);
+        EEPROM.write(2 + i * 2, alarm->time.minute);
     }
     EEPROM.commit();
     Serial.println("Alarms saved!");
 }
 
-bool validNumber(AsyncWebServerRequest *request, int *dest, char* fieldName)
+bool validNumber(AsyncWebServerRequest * request, int *dest, char *fieldName)
 {
-    if (!request->hasParam(fieldName))
-    {
-        return false;
-    }
+        if (!request->hasParam(fieldName))
+        {
+            return false;
+        }
 
-    try {
+        try {
         *dest = atoi(request->getParam(fieldName)->value().c_str());
     }
     catch (std::invalid_argument const &e)
@@ -353,7 +459,7 @@ bool validNewAlarm(AsyncWebServerRequest *request, int *hours, int *minutes)
     for (int i = 0; i < alarms.size(); i++)
     {
         AlarmEntry alarm = alarms[i];
-        if (alarm.hour == *hours && alarm.minute == *minutes)
+        if (alarm.time.hour == *hours && alarm.time.minute == *minutes)
         {
             return false;
         }
@@ -382,9 +488,9 @@ void beepAlarm(void *parameter)
     while (true)
     {
         xSemaphoreTake(semaphore, portMAX_DELAY);
-
+        Serial.println("Alarm enabled!");
         digitalWrite(PIN_BUZZER, HIGH);
-        digitalWrite(LED, HIGH);
+        digitalWrite(LED_RED, HIGH);
         int repeats = 0;
         int loop = 0;
         while (!button.status() && repeats < 60)
@@ -403,6 +509,7 @@ void beepAlarm(void *parameter)
             delay(5);
         }
         digitalWrite(PIN_BUZZER, LOW);
-        digitalWrite(LED, LOW);
+        digitalWrite(LED_RED, LOW);
+        Serial.println("Alarm disabled!");
     }
 }
