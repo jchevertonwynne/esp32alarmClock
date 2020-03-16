@@ -14,17 +14,8 @@ const int MAX_ALARMS = 250;
 
 const int TIME_TO_SLEEP = 120;
 
-struct Time
-{
-    int hour;
-    int minute;
-};
-
-struct AlarmEntry
-{
-    Time time;
-    bool complete;
-};
+struct Time;
+struct AlarmEntry;
 
 void monitorWifiConnection();
 
@@ -65,6 +56,64 @@ const int daylightOffset_sec = 0;
 struct tm currentTime;
 struct tm lastTime;
 
+void setup()
+{
+    Serial.begin(115200);
+    EEPROM.begin(512);
+    pinMode(PIN_BUZZER, OUTPUT);
+    pinMode(PIN_BUTTON, INPUT_PULLUP);
+    pinMode(LED_RED, OUTPUT);
+    pinMode(LED_GREEN, OUTPUT);
+
+    digitalWrite(LED_GREEN, HIGH);
+    monitorWifiConnection();
+
+    Serial.println("Setting time...");
+    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+    Serial.println("Time set!");
+
+    loadAlarms();
+    initServer();
+
+    semaphore = xSemaphoreCreateBinary();
+    xTaskCreatePinnedToCore(
+        beepAlarm,   /* Function to implement the task */
+        "beepAlarm", /* Name of the task */
+        10000,       /* Stack size in words */
+        NULL,        /* Task input parameter */
+        0,           /* Priority of the task */
+        &Task1,      /* Task handle. */
+        0            /* Core where the task should run */
+    );
+}
+
+void loop()
+{
+    if (++lastInteraction > TIME_TO_SLEEP)
+        goToSleep();
+    monitorWifiConnection();
+    getLocalTime(&currentTime);
+    if (currentTime.tm_hour == 0 && currentTime.tm_min == 0 && lastTime.tm_hour == 23 && lastTime.tm_min == 59)
+        enableAlarms();
+    Serial.printf("%02d:%02d:%02d\n", currentTime.tm_hour, currentTime.tm_min, currentTime.tm_sec);
+    if (anyAlarmsDueNow())
+        xSemaphoreGive(semaphore);
+    lastTime = currentTime;
+    delay(1000);
+}
+
+struct Time
+{
+    int hour;
+    int minute;
+};
+
+struct AlarmEntry
+{
+    Time time;
+    bool complete;
+};
+
 bool compareAlarms(AlarmEntry a, AlarmEntry b)
 {
     Time aTime = a.time;
@@ -89,7 +138,8 @@ Time nextAlarm()
     for (int i = 0; i < alarms.size(); i++) 
     {
         Time alarmTime = alarms[i].time;
-        if (compareTimes(now, alarmTime)) return alarmTime;
+        if (compareTimes(now, alarmTime)) 
+            return alarmTime;
     }
     return alarms[0].time;
 }
@@ -156,49 +206,6 @@ void enableAlarms()
     for (int i = 0; i < alarms.size(); i++) 
         alarms[i].complete = false;
     Serial.println("Alarms enabled!");
-}
-
-void setup()
-{
-    Serial.begin(115200);
-    EEPROM.begin(512);
-    pinMode(PIN_BUZZER, OUTPUT);
-    pinMode(PIN_BUTTON, INPUT_PULLUP);
-    pinMode(LED_RED, OUTPUT);
-    pinMode(LED_GREEN, OUTPUT);
-
-    digitalWrite(LED_GREEN, HIGH);
-    monitorWifiConnection();
-
-    Serial.println("Setting time...");
-    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-    Serial.println("Time set!");
-
-    loadAlarms();
-    initServer();
-
-    semaphore = xSemaphoreCreateBinary();
-    xTaskCreatePinnedToCore(
-        beepAlarm,   /* Function to implement the task */
-        "beepAlarm", /* Name of the task */
-        10000,       /* Stack size in words */
-        NULL,        /* Task input parameter */
-        0,           /* Priority of the task */
-        &Task1,      /* Task handle. */
-        0            /* Core where the task should run */
-    );
-}
-
-void loop()
-{
-    if (++lastInteraction > TIME_TO_SLEEP) goToSleep();
-    monitorWifiConnection();
-    getLocalTime(&currentTime);
-    if (currentTime.tm_hour == 0 && currentTime.tm_min == 0 && lastTime.tm_hour == 23 && lastTime.tm_min == 59) enableAlarms();
-    Serial.printf("%02d:%02d:%02d\n", currentTime.tm_hour, currentTime.tm_min, currentTime.tm_sec);
-    if (anyAlarmsDueNow()) xSemaphoreGive(semaphore);
-    lastTime = currentTime;
-    delay(1000);
 }
 
 void  monitorWifiConnection()
@@ -277,8 +284,8 @@ void handleRoot(AsyncWebServerRequest * request)
     page += "</ol>";
 
     page += "<form action=\"/add\">";
-    page += "Hours: <input type=\"text\" name=\"hours\">";
-    page += "Minutes: <input type=\"text\" name=\"minutes\">";
+    page += "Hours: <input type=\"number\" name=\"hours\" max=\"23\">";
+    page += "Minutes: <input type=\"number\" name=\"minutes\" max=\"59\">";
     page += "<br><br>";
     page += "<input type=\"submit\" value=\"Submit\">";
     page += "</form>";
@@ -398,7 +405,8 @@ void saveAlarms()
 
 bool validNumber(AsyncWebServerRequest * request, int *dest, char *fieldName)
 {
-    if (!request->hasParam(fieldName)) return false;
+    if (!request->hasParam(fieldName)) 
+        return false;
     try {
         *dest = atoi(request->getParam(fieldName)->value().c_str());
     }
@@ -414,27 +422,34 @@ bool validNumber(AsyncWebServerRequest * request, int *dest, char *fieldName)
 
 bool validTime(AsyncWebServerRequest *request, int *hours, int *minutes)
 {
-    if (!validNumber(request, hours, "hours") || !validNumber(request, minutes, "minutes")) return false;
-    if (*minutes < 0 || *minutes > 59) return false;
+    if (!validNumber(request, hours, "hours") || !validNumber(request, minutes, "minutes")) 
+        return false;
+    if (*minutes < 0 || *minutes > 59) 
+        return false;
     return true;
 }
 
 bool validNewAlarm(AsyncWebServerRequest *request, int *hours, int *minutes)
 {
-    if (alarms.size() == MAX_ALARMS) return false;
-    if (!validTime(request, hours, minutes)) return false;
+    if (alarms.size() == MAX_ALARMS) 
+        return false;
+    if (!validTime(request, hours, minutes)) 
+        return false;
     for (int i = 0; i < alarms.size(); i++)
     {
         AlarmEntry alarm = alarms[i];
-        if (alarm.time.hour == *hours && alarm.time.minute == *minutes) return false;
+        if (alarm.time.hour == *hours && alarm.time.minute == *minutes) 
+            return false;
     }
     return true;
 }
 
 bool validDeletion(AsyncWebServerRequest *request, int *alarmNumber)
 {
-    if (!validNumber(request, alarmNumber, "alarmNumber")) return false;
-    if (*alarmNumber < 0 || *alarmNumber >= alarms.size()) return false;
+    if (!validNumber(request, alarmNumber, "alarmNumber")) 
+        return false;
+    if (*alarmNumber < 0 || *alarmNumber >= alarms.size()) 
+        return false;
     return true;
 }
 
