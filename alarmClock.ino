@@ -24,14 +24,14 @@ void loadAlarms();
 void saveAlarms();
 
 void initServer();
-void handleRoot(AsyncWebServerRequest * request);
-void handleAdd(AsyncWebServerRequest * request);
-void handleDelete(AsyncWebServerRequest * request);
-void handleBeepNow(AsyncWebServerRequest * request);
-void handleSleep(AsyncWebServerRequest * request);
+void handleRoot(AsyncWebServerRequest *request);
+void handleAdd(AsyncWebServerRequest *request);
+void handleDelete(AsyncWebServerRequest *request);
+void handleBeepNow(AsyncWebServerRequest *request);
+void handleSleep(AsyncWebServerRequest *request);
 
-bool validDeletion(AsyncWebServerRequest * request);
-bool validNewAlarm(AsyncWebServerRequest * request);
+bool validDeletion(AsyncWebServerRequest *request, int *alarmNumber);
+bool validNewAlarm(AsyncWebServerRequest *request);
 
 void beepAlarm();
 
@@ -51,7 +51,7 @@ TaskHandle_t Task1;
 
 const char *ntpServer = "pool.ntp.org";
 const long gmtOffset_sec = 0;
-const int daylightOffset_sec = 0;
+const int daylightOffset_sec = 3600;
 
 struct tm currentTime;
 struct tm lastTime;
@@ -77,13 +77,13 @@ void setup()
 
     semaphore = xSemaphoreCreateBinary();
     xTaskCreatePinnedToCore(
-        beepAlarm,   /* Function to implement the task */
-        "beepAlarm", /* Name of the task */
-        10000,       /* Stack size in words */
-        NULL,        /* Task input parameter */
-        0,           /* Priority of the task */
-        &Task1,      /* Task handle. */
-        0            /* Core where the task should run */
+        beepAlarm,   /*Function to implement the task */
+        "beepAlarm", /*Name of the task */
+        10000,       /*Stack size in words */
+        NULL,        /*Task input parameter */
+        0,           /*Priority of the task */
+        &Task1,      /*Task handle. */
+        0            /*Core where the task should run */
     );
 }
 
@@ -246,7 +246,7 @@ void initServer()
     Serial.println(WiFi.localIP());
 }
 
-void handleRoot(AsyncWebServerRequest * request)
+void handleRoot(AsyncWebServerRequest *request)
 {
     lastInteraction = 0;
     Serial.println("Homepage requested...");
@@ -302,7 +302,7 @@ void handleRoot(AsyncWebServerRequest * request)
     Serial.println("Homepage handled!");
 }
 
-void handleAdd(AsyncWebServerRequest * request)
+void handleAdd(AsyncWebServerRequest *request)
 {
     lastInteraction = 0;
     Serial.println("New alarm request");
@@ -327,7 +327,7 @@ void handleAdd(AsyncWebServerRequest * request)
     Serial.println("New alarm handled!");
 }
 
-void handleDelete(AsyncWebServerRequest * request)
+void handleDelete(AsyncWebServerRequest *request)
 {
     lastInteraction = 0;
     Serial.println("New delete request");
@@ -346,7 +346,7 @@ void handleDelete(AsyncWebServerRequest * request)
     Serial.println("Delete request handled!");
 }
 
-void handleBeepNow(AsyncWebServerRequest * request)
+void handleBeepNow(AsyncWebServerRequest *request)
 {
     lastInteraction = 0;
     Serial.println("Beep now request");
@@ -403,7 +403,7 @@ void saveAlarms()
     Serial.println("Alarms saved!");
 }
 
-bool validNumber(AsyncWebServerRequest * request, int *dest, char *fieldName)
+bool validNumber(AsyncWebServerRequest *request, int *dest, char *fieldName)
 {
     if (!request->hasParam(fieldName)) 
         return false;
